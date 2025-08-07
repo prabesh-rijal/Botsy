@@ -1,0 +1,3 @@
+"""
+Chat functionality package
+"""
