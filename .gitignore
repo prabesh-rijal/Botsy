@@ -1,7 +1,32 @@
-# .gitignore
-node_modules/
-*.log
-*.pyc
+# --- Python ---
 __pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
 .env
+.venv/
+venv/
+ENV/
+env/
+*.log
 *.sqlite3
+
+# --- Node / JS ---
+node_modules/
+npm-debug.log
+yarn-error.log
+*.tsbuildinfo
+
+# --- Supabase ---
+.supabase/
+supabase/migrations/.temp/
+
+# --- VS Code Editor Junk ---
+.vscode/
+.history/
+*.code-workspace
+
+# --- OS trash ---
+.DS_Store
+Thumbs.db
