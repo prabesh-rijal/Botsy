@@ -36,7 +36,10 @@ async def get_user_bots(current_user=Depends(get_current_user)):
                 user_id=bot["user_id"],
                 created_at=datetime.fromisoformat(bot["created_at"]),
                 updated_at=datetime.fromisoformat(bot.get("updated_at", bot["created_at"])),
-                document_count=stats.get("total_documents", 0)
+                document_count=stats.get("total_documents", 0),
+                menu_options=bot.get("menu_options"),
+                greeting_message=bot.get("greeting_message"),
+                avatar=bot.get("avatar")
             ))
         
         return bot_responses
@@ -51,6 +54,8 @@ async def get_user_bots(current_user=Depends(get_current_user)):
 async def create_bot(bot_data: BotCreate, current_user=Depends(get_current_user)):
     """Create a new bot"""
     try:
+        menu_options_dict = [option.dict() for option in bot_data.menu_options] if bot_data.menu_options else None
+
         bot_create_data = {
             "id": str(uuid.uuid4()),
             "name": bot_data.name,
@@ -58,7 +63,10 @@ async def create_bot(bot_data: BotCreate, current_user=Depends(get_current_user)
             "system_prompt": bot_data.system_prompt,
             "user_id": current_user["id"],
             "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat()
+            "updated_at": datetime.utcnow().isoformat(),
+            "menu_options": menu_options_dict,
+            "greeting_message": bot_data.greeting_message,
+            "avatar": bot_data.avatar
         }
         
         created_bot = await db.create_bot(bot_create_data)
@@ -77,7 +85,10 @@ async def create_bot(bot_data: BotCreate, current_user=Depends(get_current_user)
             user_id=created_bot["user_id"],
             created_at=datetime.fromisoformat(created_bot["created_at"]),
             updated_at=datetime.fromisoformat(created_bot["updated_at"]),
-            document_count=0
+            document_count=0,
+            menu_options=created_bot.get("menu_options"),
+            greeting_message=created_bot.get("greeting_message"),
+            avatar=created_bot.get("avatar")
         )
         
     except Exception as e:
@@ -103,7 +114,10 @@ async def get_bot(bot_id: str, current_user=Depends(get_current_user)):
             user_id=bot["user_id"],
             created_at=datetime.fromisoformat(bot["created_at"]),
             updated_at=datetime.fromisoformat(bot.get("updated_at", bot["created_at"])),
-            document_count=stats.get("total_documents", 0)
+            document_count=stats.get("total_documents", 0),
+            menu_options=bot.get("menu_options"),
+            greeting_message=bot.get("greeting_message"),
+            avatar=bot.get("avatar")
         )
         
     except HTTPException:
@@ -122,24 +136,23 @@ async def update_bot(
 ):
     """Update a bot"""
     try:
+        print(f"Updating bot {bot_id} with data: {bot_update.dict()}")  # Logging incoming data
         await verify_bot_ownership(bot_id, current_user["id"])
         
         # Prepare update data
-        updates = {"updated_at": datetime.utcnow().isoformat()}
+        updates = bot_update.dict(exclude_unset=True)
+        updates["updated_at"] = datetime.utcnow().isoformat()
+
+        if 'menu_options' in updates and updates['menu_options'] is not None:
+            updates['menu_options'] = [option.dict() for option in bot_update.menu_options]
         
-        if bot_update.name is not None:
-            updates["name"] = bot_update.name
-        if bot_update.description is not None:
-            updates["description"] = bot_update.description
-        if bot_update.system_prompt is not None:
-            updates["system_prompt"] = bot_update.system_prompt
-        
+        print(f"Data being sent to db.update_bot: {updates}") # Logging data sent to db
         updated_bot = await db.update_bot(bot_id, updates)
         
         if not updated_bot:
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to update bot"
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Bot not found or failed to update"
             )
         
         stats = await bot_builder.get_bot_stats(bot_id)
@@ -152,12 +165,17 @@ async def update_bot(
             user_id=updated_bot["user_id"],
             created_at=datetime.fromisoformat(updated_bot["created_at"]),
             updated_at=datetime.fromisoformat(updated_bot["updated_at"]),
-            document_count=stats.get("total_documents", 0)
+            document_count=stats.get("total_documents", 0),
+            menu_options=updated_bot.get("menu_options"),
+            greeting_message=updated_bot.get("greeting_message"),
+            avatar=updated_bot.get("avatar")
         )
         
     except HTTPException:
         raise
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error updating bot: {str(e)}"
@@ -333,6 +351,62 @@ async def upload_document_from_url(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error uploading URL: {str(e)}"
+        )
+
+@router.post("/{bot_id}/avatar", response_model=BotResponse)
+async def upload_avatar(
+    bot_id: str,
+    file: UploadFile = File(...),
+    current_user=Depends(get_current_user)
+):
+    """Upload an avatar for a bot"""
+    try:
+        await verify_bot_ownership(bot_id, current_user["id"])
+        
+        # Validate file
+        if not file.filename:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No file provided"
+            )
+        
+        # Read file content
+        file_content = await file.read()
+        
+        # Save avatar
+        avatar_path = await bot_builder.save_avatar(bot_id, file.filename, file_content)
+        
+        # Update bot with avatar path
+        updated_bot = await db.update_bot(bot_id, {"avatar": avatar_path})
+        
+        if not updated_bot:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update bot with avatar"
+            )
+        
+        stats = await bot_builder.get_bot_stats(bot_id)
+        
+        return BotResponse(
+            id=updated_bot["id"],
+            name=updated_bot["name"],
+            description=updated_bot.get("description"),
+            system_prompt=updated_bot.get("system_prompt"),
+            user_id=updated_bot["user_id"],
+            created_at=datetime.fromisoformat(updated_bot["created_at"]),
+            updated_at=datetime.fromisoformat(updated_bot["updated_at"]),
+            document_count=stats.get("total_documents", 0),
+            menu_options=updated_bot.get("menu_options"),
+            greeting_message=updated_bot.get("greeting_message"),
+            avatar=updated_bot.get("avatar")
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error uploading avatar: {str(e)}"
         )
 
 @router.get("/{bot_id}/documents", response_model=List[DocumentResponse])

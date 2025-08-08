@@ -10,7 +10,12 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
-import { ArrowLeft, Bot, Save, Plus, FileText, Link, LogOut, AlertTriangle, Sparkles, X } from "lucide-react"
+import { ArrowLeft, Bot, Save, Plus, FileText, Link, LogOut, AlertTriangle, Sparkles, X, MessageSquare, Image as ImageIcon } from "lucide-react"
+
+interface MenuOption {
+  option_name: string;
+  prompt: string;
+}
 
 export default function EditBot() {
   const { user, loading } = useAuth()
@@ -22,6 +27,9 @@ export default function EditBot() {
   const [bot, setBot] = useState<any>(null)
   const [botName, setBotName] = useState("")
   const [botDescription, setBotDescription] = useState("")
+  const [greetingMessage, setGreetingMessage] = useState("")
+  const [botAvatar, setBotAvatar] = useState("")
+  const [menuOptions, setMenuOptions] = useState<MenuOption[]>([])
   const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null)
   const [urls, setUrls] = useState("")
   const [existingDocuments, setExistingDocuments] = useState<any[]>([])
@@ -29,8 +37,10 @@ export default function EditBot() {
   const [error, setError] = useState("")
   const [success, setSuccess] = useState("")
 
+  const [botAvatarFile, setBotAvatarFile] = useState<File | null>(null)
+
   useEffect(() => {
-    if (loading) return // Wait for auth to complete
+    if (loading) return
     
     if (!user) {
       navigate("/")
@@ -38,31 +48,31 @@ export default function EditBot() {
     }
     
     if (!botId) {
+      console.log("Bot ID not found in URL")
       navigate("/dashboard")
       return
     }
     
-    // Load bot data when user is authenticated and botId exists
+    console.log("Bot ID:", botId)
     loadBot()
-  }, [user, loading, botId]) // Removed navigate from dependencies
+  }, [user, loading, botId])
 
   const loadBot = async () => {
     try {
-      setError("") // Clear any previous errors
-      console.log("Loading bot with ID:", botId) // Debug log
+      setError("")
       const response = await client.get(`/api/bots/${botId}`)
       const botData = response.data
-      console.log("Bot data loaded:", botData) // Debug log
       setBot(botData)
       setBotName(botData.name || "")
       setBotDescription(botData.description || "")
+      setGreetingMessage(botData.greeting_message || "")
+      setBotAvatar(botData.avatar || "")
+      setMenuOptions(botData.menu_options || [])
       
-      // Load existing documents
       await loadExistingDocuments()
     } catch (error: any) {
       console.error('Error loading bot:', error)
       setError(error.response?.data?.detail || "Failed to load bot. Please try again.")
-      // Don't automatically redirect, let user see the error
     }
   }
 
@@ -71,22 +81,18 @@ export default function EditBot() {
       const response = await client.get(`/api/bots/${botId}/documents`)
       setExistingDocuments(response.data)
       
-      // Extract URLs from documents that are websites
       const urlDocuments = response.data.filter((doc: any) => 
-        doc.filename.startsWith('URL: ') // Only get documents with proper URL prefix
+        doc.filename.startsWith('URL: ')
       )
       
       const extractedUrls = urlDocuments.map((doc: any) => {
-        return doc.filename.substring(5) // Remove "URL: " prefix to get actual URL
+        return doc.filename.substring(5)
       }).join('\n')
       
-      // Only set URLs if we found any
       if (extractedUrls.trim()) {
         setUrls(extractedUrls)
       }
       
-      // Fallback: If no URLs found in documents but bot has URL data in chunks
-      // Try to get URL info from bot's chunks data
       if (!extractedUrls.trim()) {
         try {
           const chunksResponse = await client.get(`/api/bots/${botId}/chunks`)
@@ -97,7 +103,7 @@ export default function EditBot() {
             
             if (urlChunks.length > 0) {
               const urlsFromChunks = [...new Set(urlChunks.map((chunk: any) => 
-                chunk.source.substring(5) // Remove "URL: " prefix
+                chunk.source.substring(5)
               ))].join('\n')
               
               if (urlsFromChunks.trim()) {
@@ -110,13 +116,8 @@ export default function EditBot() {
         }
       }
       
-      console.log("All documents:", response.data)
-      console.log("URL documents:", urlDocuments)
-      console.log("Extracted URLs:", extractedUrls)
-      
     } catch (error: any) {
       console.error('Error loading documents:', error)
-      // Don't show error for documents, as bot might just have no documents
     }
   }
 
@@ -129,10 +130,8 @@ export default function EditBot() {
       await client.delete(`/api/bots/${botId}/documents/${documentId}`)
       setSuccess(`Document "${filename}" deleted successfully.`)
       
-      // Clear success message after 3 seconds
       setTimeout(() => setSuccess(""), 3000)
       
-      // Remove from local state
       setExistingDocuments(prev => prev.filter(doc => doc.id !== documentId))
       
     } catch (error: any) {
@@ -152,60 +151,65 @@ export default function EditBot() {
     setSuccess("")
 
     try {
-      // Update bot details
+      // Always use the current avatar URL unless a new file is selected
+      let avatarUrl = botAvatar;
+      if (botAvatarFile) {
+        const formData = new FormData();
+        formData.append('file', botAvatarFile);
+        const response = await client.post(`/api/bots/${botId}/avatar`, formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data'
+          }
+        });
+        avatarUrl = response.data.avatar;
+      }
+
+      // Update bot details, always send avatarUrl (persist previous if not changed)
       await client.put(`/api/bots/${botId}`, {
         name: botName,
-        description: botDescription || `A chatbot named ${botName}`
-      })
+        description: botDescription || `A chatbot named ${botName}`,
+        greeting_message: greetingMessage,
+        avatar: avatarUrl,
+        menu_options: menuOptions
+      });
 
       // Upload new files if any
       if (selectedFiles && selectedFiles.length > 0) {
         for (let i = 0; i < selectedFiles.length; i++) {
-          const file = selectedFiles[i]
-          const formData = new FormData()
-          formData.append('file', file)
-          
+          const file = selectedFiles[i];
+          const formData = new FormData();
+          formData.append('file', file);
           await client.post(`/api/bots/${botId}/documents`, formData, {
             headers: {
               'Content-Type': 'multipart/form-data'
             }
-          })
+          });
         }
       }
 
       // Process new URLs if any
       if (urls.trim()) {
-        const urlList = urls.trim().split('\n').filter(url => url.trim())
-        
+        const urlList = urls.trim().split('\n').filter(url => url.trim());
         for (const url of urlList) {
           try {
             await client.post(`/api/bots/${botId}/documents/url`, {
               url: url.trim()
-            })
+            });
           } catch (error) {
-            console.error(`Error processing URL ${url}:`, error)
-            // Continue with other URLs even if one fails
+            console.error(`Error processing URL ${url}:`, error);
           }
         }
       }
 
-      setSuccess(`🎉 Bot "${botName}" updated successfully!`)
-      
-      // Clear success message after 3 seconds
-      setTimeout(() => setSuccess(""), 3000)
-      
-      // Clear form
-      setSelectedFiles(null)
-      setUrls("")
-      
-      // Reload bot data and documents
-      loadBot()
-      
+      setSuccess(`🎉 Bot "${botName}" updated successfully!`);
+      setTimeout(() => setSuccess(""), 3000);
+      // Reload bot data to get the latest state
+      loadBot();
     } catch (error: any) {
-      console.error('Error updating bot:', error)
-      setError(error.response?.data?.detail || "Failed to update bot. Please try again.")
+      console.error('Error updating bot:', error);
+      setError(error.response?.data?.detail || "Failed to update bot. Please try again.");
     } finally {
-      setIsLoading(false)
+      setIsLoading(false);
     }
   }
 
@@ -225,6 +229,22 @@ export default function EditBot() {
     }
   }
 
+  const handleAddMenuOption = () => {
+    setMenuOptions([...menuOptions, { option_name: "", prompt: "" }])
+  }
+
+  const handleRemoveMenuOption = (index: number) => {
+    const newOptions = [...menuOptions]
+    newOptions.splice(index, 1)
+    setMenuOptions(newOptions)
+  }
+
+  const handleMenuOptionChange = (index: number, field: keyof MenuOption, value: string) => {
+    const newOptions = [...menuOptions]
+    newOptions[index][field] = value
+    setMenuOptions(newOptions)
+  }
+
   if (loading || (!bot && !error)) return (
     <div className={`min-h-screen ${themeConfig.colors.background.from} ${themeConfig.colors.background.via} ${themeConfig.colors.background.to} flex items-center justify-center`}>
       <div className="text-center">
@@ -236,12 +256,10 @@ export default function EditBot() {
     </div>
   )
 
-  // If we have an error and no bot data, still show the form but with error message
   const displayBotName = bot?.name || botName || "Unknown Bot"
 
   return (
     <div className={`min-h-screen ${themeConfig.colors.background.from} ${themeConfig.colors.background.via} ${themeConfig.colors.background.to}`}>
-      {/* Animated Background */}
       <div className="absolute inset-0 overflow-hidden opacity-30">
         <div className={`absolute -top-40 -right-40 w-80 h-80 rounded-full ${themeConfig.colors.decorative.primary} opacity-20`}></div>
         <div className={`absolute -bottom-40 -left-40 w-80 h-80 rounded-full ${themeConfig.colors.decorative.secondary} opacity-20`}></div>
@@ -249,7 +267,6 @@ export default function EditBot() {
       </div>
 
       <div className="relative z-10 p-8 max-w-4xl mx-auto">
-        {/* Header Section */}
         <div className="flex items-center justify-between mb-8 animate-in slide-in-from-top duration-1000">
           <div className="flex items-center gap-4">
             <button
@@ -283,7 +300,6 @@ export default function EditBot() {
           </div>
         </div>
 
-        {/* Status Messages */}
         {error && (
           <div className={`mb-6 p-4 ${themeConfig.colors.surface.card} border ${themeConfig.colors.surface.border} ${themeConfig.colors.text.primary} rounded-xl backdrop-blur-sm animate-in slide-in-from-top duration-300`}>
             <div className="flex items-center justify-between">
@@ -313,7 +329,6 @@ export default function EditBot() {
           </div>
         )}
 
-        {/* Bot Edit Form */}
         <Card className={`mb-8 ${themeConfig.colors.surface.glass} backdrop-blur-xl border ${themeConfig.colors.surface.border} animate-in slide-in-from-bottom duration-1000`}>
           <CardHeader>
             <CardTitle className={`${themeConfig.colors.text.primary} flex items-center gap-2`}>
@@ -325,7 +340,6 @@ export default function EditBot() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
-            {/* Bot Details */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
                 <Label htmlFor="botName" className={`${themeConfig.colors.text.primary} font-medium`}>Bot Name *</Label>
@@ -334,7 +348,7 @@ export default function EditBot() {
                   placeholder={bot ? "Bot name..." : "Loading bot name..."}
                   value={botName}
                   onChange={(e) => setBotName(e.target.value)}
-                  disabled={!bot && !error} // Disable while loading
+                  disabled={!bot && !error}
                   className={`${themeConfig.colors.surface.card} border ${themeConfig.colors.surface.border} ${themeConfig.colors.text.primary} premium-placeholder-brown focus:border-gray-400 focus:ring-gray-400/50 rounded-xl h-11 ${!bot && !error ? 'opacity-50' : ''}`}
                 />
               </div>
@@ -345,13 +359,70 @@ export default function EditBot() {
                   placeholder={bot ? "Bot description..." : "Loading bot description..."}
                   value={botDescription}
                   onChange={(e) => setBotDescription(e.target.value)}
-                  disabled={!bot && !error} // Disable while loading
+                  disabled={!bot && !error}
                   className={`${themeConfig.colors.surface.card} border ${themeConfig.colors.surface.border} ${themeConfig.colors.text.primary} premium-placeholder-brown focus:border-gray-400 focus:ring-gray-400/50 rounded-xl h-11 ${!bot && !error ? 'opacity-50' : ''}`}
                 />
               </div>
             </div>
 
-            {/* Existing Documents */}
+            <div className="space-y-2">
+              <Label htmlFor="greetingMessage" className={`${themeConfig.colors.text.primary} font-medium flex items-center gap-2`}>
+                <MessageSquare className="w-4 h-4" />
+                Greeting Message
+              </Label>
+              <Input
+                id="greetingMessage"
+                placeholder="e.g., Hello! How can I help you today?"
+                value={greetingMessage}
+                onChange={(e) => setGreetingMessage(e.target.value)}
+                className={`${themeConfig.colors.surface.card} border ${themeConfig.colors.surface.border} ${themeConfig.colors.text.primary} premium-placeholder-brown focus:border-gray-400 focus:ring-gray-400/50 rounded-xl h-11`}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="botAvatar" className={`${themeConfig.colors.text.primary} font-medium flex items-center gap-2`}>
+                <ImageIcon className="w-4 h-4" />
+                Bot Avatar
+              </Label>
+              <Input
+                id="botAvatar"
+                type="file"
+                accept="image/*"
+                onChange={(e) => setBotAvatarFile(e.target.files ? e.target.files[0] : null)}
+                className={`${themeConfig.colors.surface.card} border ${themeConfig.colors.surface.border} ${themeConfig.colors.text.primary} file:bg-gray-800 file:text-white file:border-0 file:rounded-lg file:px-4 file:py-2 file:mr-4 hover:file:bg-gray-700 rounded-xl h-11`}
+              />
+            </div>
+
+            <div className="space-y-4">
+              <Label className={`${themeConfig.colors.text.primary} font-medium flex items-center gap-2`}>
+                <Plus className="w-4 h-4" />
+                Menu Options
+              </Label>
+              {menuOptions.map((option, index) => (
+                <div key={index} className="flex items-center gap-2 p-2 border rounded-lg">
+                  <Input
+                    placeholder="Option Name (e.g., 'Pricing')"
+                    value={option.option_name}
+                    onChange={(e) => handleMenuOptionChange(index, 'option_name', e.target.value)}
+                    className="flex-1"
+                  />
+                  <Input
+                    placeholder="Prompt (e.g., 'What are your pricing plans?')"
+                    value={option.prompt}
+                    onChange={(e) => handleMenuOptionChange(index, 'prompt', e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button variant="ghost" size="icon" onClick={() => handleRemoveMenuOption(index)}>
+                    <X className="w-4 h-4" />
+                  </Button>
+                </div>
+              ))}
+              <Button variant="outline" onClick={handleAddMenuOption}>
+                <Plus className="w-4 h-4 mr-2" />
+                Add Option
+              </Button>
+            </div>
+
             {existingDocuments.length > 0 && (
               <div className="space-y-3">
                 <Label className={`${themeConfig.colors.text.primary} font-medium flex items-center gap-2`}>
@@ -361,7 +432,6 @@ export default function EditBot() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {existingDocuments
                     .filter((doc) => {
-                      // Only show actual files, not old "webpage" entries or URL documents
                       return doc.filename !== 'webpage' && !doc.filename.startsWith('URL: ') && doc.content_type !== 'text/html'
                     })
                     .map((doc) => {
@@ -395,7 +465,6 @@ export default function EditBot() {
               </div>
             )}
 
-            {/* Add More Files */}
             <div className="space-y-2">
               <Label htmlFor="fileUpload" className={`${themeConfig.colors.text.primary} font-medium flex items-center gap-2`}>
                 <FileText className="w-4 h-4" />
@@ -414,7 +483,6 @@ export default function EditBot() {
               </p>
             </div>
 
-            {/* Add More URLs */}
             <div className="space-y-2">
               <Label htmlFor="urls" className={`${themeConfig.colors.text.primary} font-medium flex items-center gap-2`}>
                 <Link className="w-4 h-4" />
@@ -431,7 +499,6 @@ export default function EditBot() {
               </p>
             </div>
 
-            {/* Action Buttons */}
             <div className="flex gap-4 pt-4">
               <Button 
                 onClick={handleUpdateBot}
