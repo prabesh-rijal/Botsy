@@ -293,3 +293,19 @@ class BotBuilder:
         except Exception as e:
             print(f"Error reading chunks for bot {bot_id}: {e}")
             return []
+
+    async def save_avatar(self, bot_id: str, filename: str, content: bytes) -> str:
+        """Save bot avatar and return the path"""
+        bot_path = self.get_bot_data_path(bot_id)
+        avatar_dir = bot_path / "avatar"
+        avatar_dir.mkdir(exist_ok=True)
+        
+        # Create a unique filename to avoid conflicts
+        file_ext = Path(filename).suffix
+        avatar_filename = f"{uuid.uuid4()}{file_ext}"
+        avatar_path = avatar_dir / avatar_filename
+        
+        with open(avatar_path, "wb") as f:
+            f.write(content)
+            
+        return str(avatar_path)
