@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useSearchParams, useNavigate } from "react-router-dom"
 import { useTheme } from "@/hooks/useTheme"
 import client from "@/api/client"
 import { supabase } from "@/lib/supabase"
-import { Send, Bot, User, FileText, ExternalLink, ChevronDown, ChevronUp, ArrowLeft, LogOut, Home, RotateCcw, Globe } from "lucide-react"
+import { Send, Bot, User, FileText, ExternalLink, ChevronDown, ChevronUp, ArrowLeft, LogOut, Home, RotateCcw, Globe, Trash2, Menu } from "lucide-react"
+import ChatWidget from "@/components/ChatWidget"
 
 interface Message {
   role: 'user' | 'assistant'
@@ -22,6 +23,8 @@ export default function TestBot() {
   const [isLoading, setIsLoading] = useState(false)
   const [bot, setBot] = useState<any>(null)
   const [showSources, setShowSources] = useState<{[key: number]: boolean}>({})
+  const [showMenu, setShowMenu] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!botId) {
@@ -31,33 +34,70 @@ export default function TestBot() {
     loadBot()
   }, [botId])
 
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setShowMenu(false)
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside)
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside)
+    }
+  }, [menuRef])
+
   const loadBot = async () => {
     try {
       const response = await client.get(`/api/bots/${botId}`)
       setBot(response.data)
+      if (response.data.greeting_message) {
+        setMessages([
+          { role: 'assistant', content: response.data.greeting_message }
+        ])
+      }
     } catch (error) {
       console.error('Error loading bot:', error)
       navigate('/dashboard')
     }
   }
 
-  const sendMessage = async () => {
-    if (!inputMessage.trim() || isLoading) return
+  const sendMessage = async (messageContent?: string) => {
+    const content = messageContent || inputMessage;
+    if (!content.trim() || isLoading) return
 
-    const userMessage: Message = { role: 'user', content: inputMessage }
+    const userMessage: Message = { role: 'user', content: content }
     setMessages(prev => [...prev, userMessage])
-    setInputMessage("")
+    if (!messageContent) {
+      setInputMessage("")
+    }
     setIsLoading(true)
 
     try {
       const response = await client.post(`/api/chat/${botId}`, {
-        content: inputMessage
+        content: content
       })
+
+      // Transform sources to expected format for ChatWidget
+      let sources = response.data.sources || [];
+      if (sources.length > 0) {
+        sources = sources.map((src: any) => {
+          if (src.metadata && src.metadata.url && src.metadata.title) {
+            return src;
+          }
+          // Try to extract url/title from src or fallback
+          return {
+            metadata: {
+              url: src.url || src.source_url || src.link || '',
+              title: src.title || src.name || src.filename || src.url || 'Source'
+            }
+          };
+        });
+      }
 
       const assistantMessage: Message = {
         role: 'assistant',
         content: response.data.message,
-        sources: response.data.sources || []
+        sources: sources
       }
 
       setMessages(prev => [...prev, assistantMessage])
@@ -108,6 +148,16 @@ export default function TestBot() {
     setMessages([])
     setInputMessage("")
     setShowSources({})
+    setShowMenu(false)
+  }
+
+  const restartChat = () => {
+    clearChat()
+    if (bot && bot.greeting_message) {
+      setMessages([
+        { role: 'assistant', content: bot.greeting_message }
+      ])
+    }
   }
 
   if (!bot) {
@@ -123,11 +173,36 @@ export default function TestBot() {
 
   return (
     <div className={`min-h-screen ${themeConfig.colors.background.from} ${themeConfig.colors.background.via} ${themeConfig.colors.background.to}`}>
-      {/* Navigation Header */}
       <div className={`${themeConfig.colors.surface.glass} backdrop-blur-sm border-b ${themeConfig.colors.surface.border} sticky top-0 z-10`}>
         <div className="max-w-4xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
+          <div className="flex flex-col items-center justify-center gap-2">
+            <div className="flex flex-col items-center gap-2">
+              <div className={`w-16 h-16 rounded-2xl bg-gradient-to-r ${themeConfig.colors.primary.from} ${themeConfig.colors.primary.to} flex items-center justify-center animate-pulse shadow-lg`}>
+                {(() => {
+                  const avatarPath = bot.avatar_url || bot.avatar;
+                  if (avatarPath) {
+                    // If already a full URL, use as is
+                    if (/^https?:\/\//.test(avatarPath)) {
+                      return <img src={avatarPath} alt="bot avatar" className="w-16 h-16 rounded-2xl object-cover" />;
+                    }
+                    // Otherwise, get public URL from Supabase
+                    try {
+                      const { data } = supabase.storage.from('botsy-bucket').getPublicUrl(avatarPath);
+                      if (!data || !data.publicUrl) {
+                        return <Bot className="w-10 h-10 text-white" />;
+                      }
+                      return <img src={data.publicUrl} alt="bot avatar" className="w-16 h-16 rounded-2xl object-cover" onError={e => { e.currentTarget.style.display = 'none'; }} />;
+                    } catch {
+                      return <Bot className="w-10 h-10 text-white" />;
+                    }
+                  }
+                  return <Bot className="w-10 h-10 text-white" />;
+                })()}
+              </div>
+              <h1 className={`text-2xl font-bold ${themeConfig.colors.text.primary} mt-2`}>{bot.name}</h1>
+              <p className={`text-base ${themeConfig.colors.text.secondary} text-center max-w-md`}>{bot.description || "AI Assistant"}</p>
+            </div>
+            <div className="flex items-center gap-2 mt-4">
               <button
                 onClick={() => navigate('/dashboard')}
                 className={`group flex items-center gap-2 px-3 py-2 rounded-lg ${themeConfig.colors.surface.card} border ${themeConfig.colors.surface.border} ${themeConfig.colors.text.primary} hover:${themeConfig.colors.surface.glass} transition-all duration-300 hover:scale-105 hover:shadow-lg active:scale-95`}
@@ -135,26 +210,6 @@ export default function TestBot() {
                 <ArrowLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform duration-300" />
                 <span className="hidden sm:inline">Back to Dashboard</span>
               </button>
-              <div className="flex items-center gap-3">
-                <div className={`w-10 h-10 rounded-xl bg-gradient-to-r ${themeConfig.colors.primary.from} ${themeConfig.colors.primary.to} flex items-center justify-center animate-pulse`}>
-                  <Bot className="w-6 h-6 text-white" />
-                </div>
-                <div>
-                  <h1 className={`text-xl font-bold ${themeConfig.colors.text.primary}`}>{bot.name}</h1>
-                  <p className={`text-sm ${themeConfig.colors.text.secondary}`}>{bot.description || "AI Assistant"}</p>
-                </div>
-              </div>
-            </div>
-            
-            <div className="flex items-center gap-2">
-              <button
-                onClick={clearChat}
-                className={`group flex items-center gap-2 px-3 py-2 rounded-lg ${themeConfig.colors.surface.card} border ${themeConfig.colors.surface.border} ${themeConfig.colors.text.secondary} hover:${themeConfig.colors.text.primary} hover:${themeConfig.colors.surface.glass} transition-all duration-300 hover:scale-105 hover:shadow-lg active:scale-95 hover:border-amber-300`}
-              >
-                <RotateCcw className="w-4 h-4 group-hover:rotate-180 transition-transform duration-500" />
-                <span className="hidden sm:inline">Clear Chat</span>
-              </button>
-              
               <button
                 onClick={handleLogout}
                 className={`group flex items-center gap-2 px-3 py-2 rounded-lg ${themeConfig.colors.surface.card} border ${themeConfig.colors.surface.border} ${themeConfig.colors.text.secondary} hover:${themeConfig.colors.text.primary} hover:${themeConfig.colors.surface.glass} transition-all duration-300 hover:scale-105 hover:shadow-lg active:scale-95 hover:border-red-300`}
@@ -167,180 +222,16 @@ export default function TestBot() {
         </div>
       </div>
 
-      {/* Chat Area */}
-      <div className="max-w-4xl mx-auto px-4 py-6">
-        <div className={`${themeConfig.colors.surface.glass} backdrop-blur-sm rounded-2xl border ${themeConfig.colors.surface.border} min-h-[600px] flex flex-col`}>
-          {/* Messages */}
-          <div className="flex-1 p-6 overflow-y-auto space-y-6">
-            {messages.length === 0 && (
-              <div className="text-center py-12">
-                <Bot className={`w-16 h-16 text-amber-500 mx-auto mb-4`} />
-                <h3 className={`text-lg font-semibold ${themeConfig.colors.text.primary} mb-2`}>Start a conversation</h3>
-                <p className={`${themeConfig.colors.text.secondary}`}>Ask me anything about the uploaded documents!</p>
-              </div>
-            )}
-
-            {messages.map((message, index) => (
-              <div key={index} className={`flex gap-3 ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                {message.role === 'assistant' && (
-                  <div className={`w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0`}>
-                    <Bot className="w-5 h-5 text-amber-600" />
-                  </div>
-                )}
-                
-                <div className={`max-w-3xl ${message.role === 'user' ? 'order-first' : ''}`}>
-                  <div className={`p-4 rounded-2xl ${
-                    message.role === 'user'
-                      ? `bg-gradient-to-r ${themeConfig.colors.primary.from} ${themeConfig.colors.primary.to} text-white ml-12`
-                      : `${themeConfig.colors.surface.card} ${themeConfig.colors.text.primary} border ${themeConfig.colors.surface.border}`
-                  }`}>
-                    <p className="leading-relaxed">{message.content}</p>
-                  </div>
-
-                  {/* Sources */}
-                  {message.role === 'assistant' && message.sources && message.sources.length > 0 && (
-                    <div className="mt-3">
-                      <button
-                        onClick={() => toggleSources(index)}
-                        className={`group flex items-center gap-2 text-sm ${themeConfig.colors.text.secondary} hover:${themeConfig.colors.text.primary} transition-all duration-300 hover:scale-105 active:scale-95`}
-                      >
-                        <span>Sources ({message.sources.length})</span>
-                        {showSources[index] ? 
-                          <ChevronUp className="w-4 h-4 group-hover:-translate-y-1 transition-transform duration-300" /> : 
-                          <ChevronDown className="w-4 h-4 group-hover:translate-y-1 transition-transform duration-300" />
-                        }
-                      </button>
-                      
-                      {showSources[index] && (
-                        <div className="mt-2 space-y-2 animate-in slide-in-from-top duration-300">
-                          {message.sources.map((source, sourceIndex) => {
-                            // Extract URL from multiple possible fields
-                            const actualUrl = source.source_url || 
-                              (source.filename?.startsWith('URL:') ? source.filename.replace('URL:', '').trim() : null) ||
-                              source.url
-                            
-                            const isUrl = actualUrl && (actualUrl.startsWith('http://') || actualUrl.startsWith('https://'))
-                            
-                            return (
-                              <div key={sourceIndex} className={`${themeConfig.colors.surface.card} rounded-lg p-3 border ${themeConfig.colors.surface.border} hover:shadow-md transition-all duration-300`}>
-                                <div className="flex items-start gap-2">
-                                  {isUrl ? (
-                                    <ExternalLink className={`w-4 h-4 ${themeConfig.colors.text.muted} mt-0.5 flex-shrink-0`} />
-                                  ) : (
-                                    <FileText className={`w-4 h-4 ${themeConfig.colors.text.muted} mt-0.5 flex-shrink-0`} />
-                                  )}
-                                  <div className="flex-1 min-w-0">
-                                    {/* Title/URL and Similarity Score */}
-                                    <div className="flex items-center justify-between gap-2 mb-2">
-                                      <div className="flex-1 min-w-0">
-                                        {isUrl ? (
-                                          <a
-                                            href={actualUrl}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className={`group text-sm font-medium ${themeConfig.colors.text.primary} hover:text-amber-600 transition-all duration-300 hover:scale-[1.02] transform-gpu block`}
-                                          >
-                                            <span className="truncate">{actualUrl}</span>
-                                          </a>
-                                        ) : (
-                                          <span className={`text-sm font-medium ${themeConfig.colors.text.primary} block truncate`}>
-                                            {source.filename || 'Document'}
-                                          </span>
-                                        )}
-                                      </div>
-                                      
-                                      {/* Similarity Score - Check multiple field names */}
-                                      {(source.similarity_score !== undefined && source.similarity_score !== null && source.similarity_score >= 0) ? (
-                                        <div className={`flex items-center gap-1 px-2 py-1 rounded-full bg-amber-100 border border-amber-200`}>
-                                          <div className={`w-2 h-2 rounded-full ${
-                                            source.similarity_score > 0.8 ? 'bg-green-500' :
-                                            source.similarity_score > 0.6 ? 'bg-yellow-500' : 'bg-red-500'
-                                          }`}></div>
-                                          <span className={`text-xs font-medium text-amber-800`}>
-                                            {Math.round(source.similarity_score * 100)}%
-                                          </span>
-                                        </div>
-                                      ) : (source.similarity !== undefined && source.similarity !== null && source.similarity >= 0) ? (
-                                        <div className={`flex items-center gap-1 px-2 py-1 rounded-full bg-amber-100 border border-amber-200`}>
-                                          <div className={`w-2 h-2 rounded-full ${
-                                            source.similarity > 0.8 ? 'bg-green-500' :
-                                            source.similarity > 0.6 ? 'bg-yellow-500' : 'bg-red-500'
-                                          }`}></div>
-                                          <span className={`text-xs font-medium text-amber-800`}>
-                                            {Math.round(source.similarity * 100)}%
-                                          </span>
-                                        </div>
-                                      ) : null}
-                                    </div>
-                                    
-                                    {/* Content Preview */}
-                                    {(source.content_preview || source.content) && (
-                                      <p className={`text-xs ${themeConfig.colors.text.secondary} leading-relaxed line-clamp-2`}>
-                                        {(source.content_preview || source.content).substring(0, 150)}...
-                                      </p>
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {message.role === 'user' && (
-                  <div className={`w-8 h-8 rounded-full bg-gradient-to-r ${themeConfig.colors.primary.from} ${themeConfig.colors.primary.to} flex items-center justify-center flex-shrink-0`}>
-                    <User className="w-5 h-5 text-white" />
-                  </div>
-                )}
-              </div>
-            ))}
-
-            {isLoading && (
-              <div className="flex gap-3 justify-start">
-                <div className={`w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0`}>
-                  <Bot className="w-5 h-5 text-amber-600" />
-                </div>
-                <div className={`${themeConfig.colors.surface.card} ${themeConfig.colors.text.primary} border ${themeConfig.colors.surface.border} p-4 rounded-2xl`}>
-                  <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 bg-amber-500 rounded-full animate-bounce"></div>
-                    <div className="w-2 h-2 bg-amber-500 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
-                    <div className="w-2 h-2 bg-amber-500 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Input Area */}
-          <div className={`border-t ${themeConfig.colors.surface.border} p-4`}>
-            <div className="flex gap-3 items-end">
-              <div className="flex-1">
-                <textarea
-                  value={inputMessage}
-                  onChange={(e) => setInputMessage(e.target.value)}
-                  onKeyPress={handleKeyPress}
-                  placeholder="Type your message..."
-                  className={`w-full px-4 py-3 ${themeConfig.colors.surface.card} border ${themeConfig.colors.surface.border} rounded-xl ${themeConfig.colors.text.primary} placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent resize-none`}
-                  rows={1}
-                  style={{
-                    minHeight: '44px',
-                    maxHeight: '120px'
-                  }}
-                />
-              </div>
-              <button
-                onClick={sendMessage}
-                disabled={!inputMessage.trim() || isLoading}
-                className={`group w-11 h-11 bg-gradient-to-r ${themeConfig.colors.primary.from} ${themeConfig.colors.primary.to} text-white rounded-xl hover:opacity-80 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300 flex items-center justify-center hover:scale-110 active:scale-95 hover:shadow-lg`}
-              >
-                <Send className={`w-5 h-5 group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform duration-300 ${isLoading ? 'animate-pulse' : ''}`} />
-              </button>
-            </div>
-          </div>
-        </div>
+      <div className="max-w-4xl mx-auto px-4 py-6 flex justify-center items-center">
+        {bot && (
+          <ChatWidget
+            bot={bot}
+            messages={messages}
+            onSend={(message) => sendMessage(message)}
+            onRestart={restartChat}
+            onClear={clearChat}
+          />
+        )}
       </div>
     </div>
   )
