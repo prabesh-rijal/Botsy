@@ -22,15 +22,27 @@ class UserResponse(BaseModel):
     created_at: datetime
 
 # Bot models
+class MenuOption(BaseModel):
+    option_name: str
+    prompt: str
+
 class BotCreate(BaseModel):
     name: str
     description: Optional[str] = None
     system_prompt: Optional[str] = None
+    menu_options: Optional[List[MenuOption]] = None
+    greeting_message: Optional[str] = None
+    avatar: Optional[str] = None
+
 
 class BotUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     system_prompt: Optional[str] = None
+    menu_options: Optional[List[MenuOption]] = None
+    greeting_message: Optional[str] = None
+    avatar: Optional[str] = None
+
 
 class BotResponse(BaseModel):
     id: str
@@ -41,6 +53,9 @@ class BotResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     document_count: int = 0
+    menu_options: Optional[List[MenuOption]] = None
+    greeting_message: Optional[str] = None
+    avatar: Optional[str] = None
 
 # Document models
 class DocumentUpload(BaseModel):
