@@ -72,4 +72,5 @@ npm run dev
 <!-- ITERATION_DOCS_START -->
 - [📌 Iteration 01 – Bot Menu Options & Chat UI Enhancements](docs/it01_botoptions-chatui-update.md)
 - [📌 Iteration 02 – Automated Options](docs/it02_second.md)
+- [📌 Iteration 03 – Bots data update](docs/it03_data-database-update.md)
 <!-- ITERATION_DOCS_END -->
