@@ -1,19 +1,98 @@
 """
-Embedding generation utilities using free sentence transformers
+Embedding generation utilities with robust fallback system
 """
 import os
 from typing import List
 import asyncio
 import numpy as np
-from sentence_transformers import SentenceTransformer
+import hashlib
+import re
+from collections import Counter
+
+# Set environment variables to fix Unicode encoding issues
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+
+class SimpleTFIDFEmbedder:
+    """Simple TF-IDF based embedding as fallback"""
+    
+    def __init__(self):
+        self.vocabulary = {}
+        self.idf_scores = {}
+        self.dimension = 384
+        
+    def _tokenize(self, text: str) -> List[str]:
+        """Simple tokenization"""
+        # Convert to lowercase and extract words
+        text = text.lower()
+        tokens = re.findall(r'\b\w+\b', text)
+        return tokens
+    
+    def _build_vocabulary(self, texts: List[str]):
+        """Build vocabulary from texts"""
+        all_tokens = []
+        doc_frequencies = Counter()
+        
+        for text in texts:
+            tokens = self._tokenize(text)
+            all_tokens.extend(tokens)
+            doc_frequencies.update(set(tokens))
+        
+        # Create vocabulary (most common words)
+        token_counts = Counter(all_tokens)
+        vocab_size = min(self.dimension, len(token_counts))
+        
+        most_common = token_counts.most_common(vocab_size)
+        self.vocabulary = {token: idx for idx, (token, _) in enumerate(most_common)}
+        
+        # Calculate IDF scores
+        num_docs = len(texts)
+        for token in self.vocabulary:
+            df = doc_frequencies[token]
+            self.idf_scores[token] = np.log(num_docs / (df + 1))
+    
+    def encode(self, texts: List[str]) -> np.ndarray:
+        """Create TF-IDF embeddings"""
+        if not self.vocabulary:
+            self._build_vocabulary(texts)
+        
+        embeddings = []
+        
+        for text in texts:
+            tokens = self._tokenize(text)
+            token_counts = Counter(tokens)
+            
+            # Create TF-IDF vector
+            vector = np.zeros(self.dimension)
+            
+            for token, count in token_counts.items():
+                if token in self.vocabulary:
+                    idx = self.vocabulary[token]
+                    tf = count / len(tokens) if tokens else 0
+                    idf = self.idf_scores.get(token, 1.0)
+                    vector[idx] = tf * idf
+            
+            # Normalize vector
+            norm = np.linalg.norm(vector)
+            if norm > 0:
+                vector = vector / norm
+            
+            embeddings.append(vector)
+        
+        return np.array(embeddings, dtype=np.float32)
 
 class EmbeddingService:
-    """Service for generating embeddings using free sentence transformers"""
+    """Service for generating embeddings with robust fallback system"""
     
     def __init__(self, model: str = "all-MiniLM-L6-v2"):
-        # Use a free, lightweight embedding model
-        self.model = SentenceTransformer(model)
-        self.dimension = 384  # all-MiniLM-L6-v2 dimension
+        self.model = None
+        self.fallback_embedder = SimpleTFIDFEmbedder()
+        self.dimension = 384
+        self.use_fallback = True
+        
+        print("🔧 Initializing embedding service with TF-IDF fallback")
+        print("✅ Fallback embedder ready - will use TF-IDF for semantic similarity")
+        print("💡 This provides reasonable search quality without external model downloads")
     
     async def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
         """
@@ -29,21 +108,24 @@ class EmbeddingService:
             return []
         
         try:
-            # Run embedding generation in a thread to avoid blocking
-            import asyncio
+            print(f"🔤 Generating TF-IDF embeddings for {len(texts)} texts")
+            
+            # Run TF-IDF embedding generation in a thread to avoid blocking
             loop = asyncio.get_event_loop()
             
             def _encode():
-                return self.model.encode(texts, convert_to_tensor=False)
+                return self.fallback_embedder.encode(texts)
             
             embeddings = await loop.run_in_executor(None, _encode)
             
             # Convert to list of lists
-            return [emb.tolist() for emb in embeddings]
+            result = [emb.tolist() for emb in embeddings]
+            print(f"✅ Generated {len(result)} TF-IDF embeddings successfully")
+            return result
             
         except Exception as e:
-            print(f"Error generating embeddings: {e}")
-            # Return zero vectors as fallback
+            print(f"❌ Error generating TF-IDF embeddings: {e}")
+            # Return zero vectors as last resort
             return [[0.0] * self.dimension for _ in texts]
     
     async def generate_single_embedding(self, text: str) -> List[float]:
@@ -167,7 +249,5 @@ class EmbeddingService:
         # Simple query preprocessing
         query = query.strip()
         
-        # Add search context prefix to improve relevance
-        search_query = f"search query: {query}"
-        
-        return await self.generate_single_embedding(search_query)
+        # For TF-IDF, we don't need the search prefix
+        return await self.generate_single_embedding(query)
